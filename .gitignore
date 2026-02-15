@@ -1,1 +1,3 @@
 .claude/
+.pytest_cache/
+.venv/

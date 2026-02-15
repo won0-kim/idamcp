@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import threading
 
 import uvicorn
 from mcp.server.fastmcp import FastMCP
+
+# Suppress noisy pydantic validation warnings from MCP's request parsing
+# (e.g. CancelTaskRequest.params.taskId Field required)
+logging.getLogger("mcp.server.lowlevel").setLevel(logging.ERROR)
+logging.getLogger("mcp.server").setLevel(logging.ERROR)
 
 from idamcp.bridge import execute_ida_script, format_result
 
@@ -12,6 +18,27 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 13337
 
 mcp = FastMCP("idamcp")
+
+
+_ADDR_PARSE = """\
+def _parse_addr(s):
+    s = s.strip()
+    if s.startswith("0x") or s.startswith("0X"):
+        return int(s, 16)
+    try:
+        return int(s)
+    except ValueError:
+        import idc
+        ea = idc.get_name_ea_simple(s)
+        if ea != idc.BADADDR:
+            return ea
+        return int(s, 16)
+"""
+
+
+# ---------------------------------------------------------------------------
+# Generic tool
+# ---------------------------------------------------------------------------
 
 
 @mcp.tool()
@@ -24,6 +51,367 @@ async def execute_script(code: str) -> str:
     Example:
         code: "import idautils; __result__ = list(idautils.Functions())[:5]"
     """
+    result = await execute_ida_script(code)
+    return format_result(result)
+
+
+# ---------------------------------------------------------------------------
+# Information retrieval tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def get_function_list(filter_pattern: str = "") -> str:
+    """List all functions in the binary.
+
+    Returns JSON array of {"address": "0x...", "name": "..."}.
+    Optionally filter by glob pattern (e.g. "sub_*", "*main*").
+    """
+    code = """
+import json, idautils, idc
+functions = []
+for ea in idautils.Functions():
+    functions.append({"address": hex(ea), "name": idc.get_func_name(ea)})
+"""
+    if filter_pattern:
+        code += f"""
+import fnmatch
+functions = [f for f in functions if fnmatch.fnmatch(f["name"], {filter_pattern!r})]
+"""
+    code += "__result__ = json.dumps(functions)\n"
+    result = await execute_ida_script(code)
+    return format_result(result)
+
+
+@mcp.tool()
+async def decompile(address: str) -> str:
+    """Decompile a function at the given address to pseudocode using Hex-Rays.
+
+    Args:
+        address: Function address as hex string (e.g. "0x401000") or function name.
+    """
+    code = _ADDR_PARSE + f"""
+import ida_funcs, ida_lines
+try:
+    import ida_hexrays
+except ImportError:
+    __result__ = "Error: Hex-Rays decompiler is not available."
+else:
+    addr = _parse_addr({address!r})
+    func = ida_funcs.get_func(addr)
+    if func is None:
+        __result__ = f"Error: No function found at address {{hex(addr)}}"
+    else:
+        try:
+            cfunc = ida_hexrays.decompile(func.start_ea)
+            lines = cfunc.get_pseudocode()
+            __result__ = "\\n".join(ida_lines.tag_remove(l.line) for l in lines)
+        except ida_hexrays.DecompilationFailure as e:
+            __result__ = f"Error: Decompilation failed: {{e}}"
+"""
+    result = await execute_ida_script(code)
+    return format_result(result)
+
+
+@mcp.tool()
+async def get_disassembly(address: str, count: int = 30) -> str:
+    """Get disassembly listing starting at address.
+
+    Args:
+        address: Start address (hex string or name).
+        count: Number of instructions to disassemble (default 30).
+    """
+    code = _ADDR_PARSE + f"""
+import idc
+ea = _parse_addr({address!r})
+lines = []
+for _ in range({count!r}):
+    if ea == idc.BADADDR:
+        break
+    lines.append(f"{{hex(ea)}}  {{idc.generate_disasm_line(ea, 0)}}")
+    ea = idc.next_head(ea)
+__result__ = "\\n".join(lines)
+"""
+    result = await execute_ida_script(code)
+    return format_result(result)
+
+
+@mcp.tool()
+async def get_xrefs_to(address: str) -> str:
+    """Get cross-references TO the given address.
+
+    Returns JSON array of {"from": "0x...", "type": "...", "is_code": bool}.
+
+    Args:
+        address: Target address (hex string or name).
+    """
+    code = _ADDR_PARSE + f"""
+import json, idautils, ida_xref
+ea = _parse_addr({address!r})
+xrefs = []
+for x in idautils.XrefsTo(ea):
+    xrefs.append({{"from": hex(x.frm), "type": ida_xref.get_xref_type_name(x.type), "is_code": bool(x.iscode)}})
+__result__ = json.dumps(xrefs)
+"""
+    result = await execute_ida_script(code)
+    return format_result(result)
+
+
+@mcp.tool()
+async def get_xrefs_from(address: str) -> str:
+    """Get cross-references FROM the given address.
+
+    Returns JSON array of {"to": "0x...", "type": "...", "is_code": bool}.
+
+    Args:
+        address: Source address (hex string or name).
+    """
+    code = _ADDR_PARSE + f"""
+import json, idautils, ida_xref
+ea = _parse_addr({address!r})
+xrefs = []
+for x in idautils.XrefsFrom(ea):
+    xrefs.append({{"to": hex(x.to), "type": ida_xref.get_xref_type_name(x.type), "is_code": bool(x.iscode)}})
+__result__ = json.dumps(xrefs)
+"""
+    result = await execute_ida_script(code)
+    return format_result(result)
+
+
+@mcp.tool()
+async def get_strings(min_length: int = 4) -> str:
+    """List strings found in the binary.
+
+    Returns JSON array of {"address": "0x...", "value": "...", "length": N}.
+
+    Args:
+        min_length: Minimum string length to include (default 4).
+    """
+    code = f"""
+import json, idautils
+strings = []
+for s in idautils.Strings():
+    if s.length >= {min_length!r}:
+        strings.append({{"address": hex(s.ea), "value": str(s), "length": s.length}})
+__result__ = json.dumps(strings)
+"""
+    result = await execute_ida_script(code)
+    return format_result(result)
+
+
+@mcp.tool()
+async def get_imports() -> str:
+    """List all imported functions.
+
+    Returns JSON array of {"module": "...", "name": "...", "address": "0x...", "ordinal": N}.
+    """
+    code = """
+import json, ida_nalt
+
+imports = []
+
+def _cb(ea, name, ordinal):
+    imports.append({"module": _cur_mod, "name": name or "", "address": hex(ea), "ordinal": ordinal})
+    return True
+
+for i in range(ida_nalt.get_import_module_qty()):
+    _cur_mod = ida_nalt.get_import_module_name(i)
+    ida_nalt.enum_import_names(i, _cb)
+
+__result__ = json.dumps(imports)
+"""
+    result = await execute_ida_script(code)
+    return format_result(result)
+
+
+@mcp.tool()
+async def get_exports() -> str:
+    """List all exported functions/symbols.
+
+    Returns JSON array of {"ordinal": N, "address": "0x...", "name": "..."}.
+    """
+    code = """
+import json, idautils
+exports = []
+for ordinal, ea, name in idautils.Entries():
+    exports.append({"ordinal": ordinal, "address": hex(ea), "name": name})
+__result__ = json.dumps(exports)
+"""
+    result = await execute_ida_script(code)
+    return format_result(result)
+
+
+@mcp.tool()
+async def get_function_info(address: str) -> str:
+    """Get detailed information about a function.
+
+    Returns JSON with name, start/end address, size, flags, prototype, frame info.
+
+    Args:
+        address: Function address (hex string or name).
+    """
+    code = _ADDR_PARSE + f"""
+import json, ida_funcs, idc
+
+ea = _parse_addr({address!r})
+func = ida_funcs.get_func(ea)
+if func is None:
+    __result__ = f"Error: No function at {{hex(ea)}}"
+else:
+    info = {{
+        "name": idc.get_func_name(func.start_ea),
+        "start": hex(func.start_ea),
+        "end": hex(func.end_ea),
+        "size": func.end_ea - func.start_ea,
+        "prototype": idc.get_type(func.start_ea) or "",
+        "frame_size": idc.get_frame_size(func.start_ea),
+        "local_vars_size": idc.get_frame_lvar_size(func.start_ea),
+        "args_size": idc.get_frame_args_size(func.start_ea),
+        "flags": hex(func.flags),
+        "is_library": bool(func.flags & ida_funcs.FUNC_LIB),
+        "is_thunk": bool(func.flags & ida_funcs.FUNC_THUNK),
+    }}
+    __result__ = json.dumps(info, indent=2)
+"""
+    result = await execute_ida_script(code)
+    return format_result(result)
+
+
+@mcp.tool()
+async def get_segments() -> str:
+    """List all memory segments in the binary.
+
+    Returns JSON array of {"name": ".text", "start": "0x...", "end": "0x...",
+    "size": N, "permissions": "rwx", "class": "CODE"}.
+    """
+    code = """
+import json, idautils, idc, ida_segment
+
+segments = []
+for ea in idautils.Segments():
+    seg = ida_segment.getseg(ea)
+    perms = ""
+    perms += "r" if seg.perm & ida_segment.SFL_READ else "-"
+    perms += "w" if seg.perm & ida_segment.SFL_WRITE else "-"
+    perms += "x" if seg.perm & ida_segment.SFL_EXEC else "-"
+    segments.append({
+        "name": idc.get_segm_name(ea),
+        "start": hex(seg.start_ea),
+        "end": hex(seg.end_ea),
+        "size": seg.end_ea - seg.start_ea,
+        "permissions": perms,
+        "class": idc.get_segm_class(ea),
+    })
+__result__ = json.dumps(segments, indent=2)
+"""
+    result = await execute_ida_script(code)
+    return format_result(result)
+
+
+# ---------------------------------------------------------------------------
+# Modification tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def rename_function(address: str, new_name: str) -> str:
+    """Rename a function at the given address.
+
+    Args:
+        address: Function address (hex string or name).
+        new_name: New name for the function.
+    """
+    code = _ADDR_PARSE + f"""
+import idc
+ea = _parse_addr({address!r})
+if idc.set_name(ea, {new_name!r}, idc.SN_CHECK):
+    __result__ = f"Renamed function at {{hex(ea)}} to {new_name!r}"
+else:
+    __result__ = f"Error: Failed to rename function at {{hex(ea)}} to {new_name!r}"
+"""
+    result = await execute_ida_script(code)
+    return format_result(result)
+
+
+@mcp.tool()
+async def rename_variable(
+    function_address: str, old_name: str, new_name: str
+) -> str:
+    """Rename a local variable in a decompiled function (requires Hex-Rays).
+
+    Args:
+        function_address: Address of the function containing the variable.
+        old_name: Current variable name.
+        new_name: New variable name.
+    """
+    code = _ADDR_PARSE + f"""
+import ida_funcs
+try:
+    import ida_hexrays
+except ImportError:
+    __result__ = "Error: Hex-Rays decompiler is not available."
+else:
+    ea = _parse_addr({function_address!r})
+    func = ida_funcs.get_func(ea)
+    if func is None:
+        __result__ = f"Error: No function at {{hex(ea)}}"
+    else:
+        try:
+            cfunc = ida_hexrays.decompile(func.start_ea)
+            found = False
+            for lvar in cfunc.lvars:
+                if lvar.name == {old_name!r}:
+                    if cfunc.rename_lvar(lvar, {new_name!r}):
+                        __result__ = f"Renamed '{{lvar.name}}' to {new_name!r} in {{hex(func.start_ea)}}"
+                    else:
+                        __result__ = f"Error: Failed to rename '{old_name!r}'"
+                    found = True
+                    break
+            if not found:
+                names = [lv.name for lv in cfunc.lvars]
+                __result__ = f"Error: Variable {old_name!r} not found. Available: {{names}}"
+        except ida_hexrays.DecompilationFailure as e:
+            __result__ = f"Error: Decompilation failed: {{e}}"
+"""
+    result = await execute_ida_script(code)
+    return format_result(result)
+
+
+@mcp.tool()
+async def set_comment(address: str, comment: str, is_repeatable: bool = False) -> str:
+    """Set a comment at the given address.
+
+    Args:
+        address: Target address (hex string or name).
+        comment: Comment text.
+        is_repeatable: If True, set as repeatable comment (shown at xref sites).
+    """
+    code = _ADDR_PARSE + f"""
+import idc
+ea = _parse_addr({address!r})
+idc.set_cmt(ea, {comment!r}, {is_repeatable!r})
+__result__ = f"Comment set at {{hex(ea)}}"
+"""
+    result = await execute_ida_script(code)
+    return format_result(result)
+
+
+@mcp.tool()
+async def set_function_type(address: str, type_string: str) -> str:
+    """Set a function's type/prototype signature.
+
+    Args:
+        address: Function address (hex string or name).
+        type_string: C-style function prototype (e.g. "int __cdecl foo(int a, char *b)").
+    """
+    code = _ADDR_PARSE + f"""
+import idc
+ea = _parse_addr({address!r})
+if idc.SetType(ea, {type_string!r}):
+    __result__ = f"Type set at {{hex(ea)}}: {type_string!r}"
+else:
+    __result__ = f"Error: Failed to set type at {{hex(ea)}}. Check syntax: {type_string!r}"
+"""
     result = await execute_ida_script(code)
     return format_result(result)
 
