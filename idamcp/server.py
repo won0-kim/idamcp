@@ -12,7 +12,14 @@ from mcp.server.fastmcp import FastMCP
 logging.getLogger("mcp.server.lowlevel").setLevel(logging.ERROR)
 logging.getLogger("mcp.server").setLevel(logging.ERROR)
 
+import ida_kernwin
+
 from idamcp.bridge import execute_ida_script, format_result
+
+
+def _log_call(name: str, **kwargs: object) -> None:
+    args = ", ".join(f"{k}={v}" for k, v in kwargs.items() if v)
+    ida_kernwin.msg(f"[IDAMCP] {name}({args})\n")
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 13337
@@ -51,6 +58,7 @@ async def execute_script(code: str) -> str:
     Example:
         code: "import idautils; __result__ = list(idautils.Functions())[:5]"
     """
+    _log_call("execute_script")
     result = await execute_ida_script(code)
     return format_result(result)
 
@@ -67,6 +75,7 @@ async def get_function_list(filter_pattern: str = "") -> str:
     Returns JSON array of {"address": "0x...", "name": "..."}.
     Optionally filter by glob pattern (e.g. "sub_*", "*main*").
     """
+    _log_call("get_function_list", filter=filter_pattern)
     code = """
 import json, idautils, idc
 functions = []
@@ -90,6 +99,7 @@ async def decompile(address: str) -> str:
     Args:
         address: Function address as hex string (e.g. "0x401000") or function name.
     """
+    _log_call("decompile", address=address)
     code = _ADDR_PARSE + f"""
 import ida_funcs, ida_lines
 try:
@@ -121,6 +131,7 @@ async def get_disassembly(address: str, count: int = 30) -> str:
         address: Start address (hex string or name).
         count: Number of instructions to disassemble (default 30).
     """
+    _log_call("get_disassembly", address=address, count=count)
     code = _ADDR_PARSE + f"""
 import idc
 ea = _parse_addr({address!r})
@@ -145,6 +156,7 @@ async def get_xrefs_to(address: str) -> str:
     Args:
         address: Target address (hex string or name).
     """
+    _log_call("get_xrefs_to", address=address)
     code = _ADDR_PARSE + f"""
 import json, idautils, ida_xref
 ea = _parse_addr({address!r})
@@ -166,6 +178,7 @@ async def get_xrefs_from(address: str) -> str:
     Args:
         address: Source address (hex string or name).
     """
+    _log_call("get_xrefs_from", address=address)
     code = _ADDR_PARSE + f"""
 import json, idautils, ida_xref
 ea = _parse_addr({address!r})
@@ -187,6 +200,7 @@ async def get_strings(min_length: int = 4) -> str:
     Args:
         min_length: Minimum string length to include (default 4).
     """
+    _log_call("get_strings", min_length=min_length)
     code = f"""
 import json, idautils
 strings = []
@@ -205,6 +219,7 @@ async def get_imports() -> str:
 
     Returns JSON array of {"module": "...", "name": "...", "address": "0x...", "ordinal": N}.
     """
+    _log_call("get_imports")
     code = """
 import json, ida_nalt
 
@@ -230,6 +245,7 @@ async def get_exports() -> str:
 
     Returns JSON array of {"ordinal": N, "address": "0x...", "name": "..."}.
     """
+    _log_call("get_exports")
     code = """
 import json, idautils
 exports = []
@@ -250,6 +266,7 @@ async def get_function_info(address: str) -> str:
     Args:
         address: Function address (hex string or name).
     """
+    _log_call("get_function_info", address=address)
     code = _ADDR_PARSE + f"""
 import json, ida_funcs, idc
 
@@ -284,6 +301,7 @@ async def get_segments() -> str:
     Returns JSON array of {"name": ".text", "start": "0x...", "end": "0x...",
     "size": N, "permissions": "rwx", "class": "CODE"}.
     """
+    _log_call("get_segments")
     code = """
 import json, idautils, idc, ida_segment
 
@@ -321,6 +339,7 @@ async def rename_function(address: str, new_name: str) -> str:
         address: Function address (hex string or name).
         new_name: New name for the function.
     """
+    _log_call("rename_function", address=address, new_name=new_name)
     code = _ADDR_PARSE + f"""
 import idc
 ea = _parse_addr({address!r})
@@ -344,6 +363,7 @@ async def rename_variable(
         old_name: Current variable name.
         new_name: New variable name.
     """
+    _log_call("rename_variable", address=function_address, old=old_name, new=new_name)
     code = _ADDR_PARSE + f"""
 import ida_funcs
 try:
@@ -386,6 +406,7 @@ async def set_comment(address: str, comment: str, is_repeatable: bool = False) -
         comment: Comment text.
         is_repeatable: If True, set as repeatable comment (shown at xref sites).
     """
+    _log_call("set_comment", address=address)
     code = _ADDR_PARSE + f"""
 import idc
 ea = _parse_addr({address!r})
@@ -404,6 +425,7 @@ async def set_function_type(address: str, type_string: str) -> str:
         address: Function address (hex string or name).
         type_string: C-style function prototype (e.g. "int __cdecl foo(int a, char *b)").
     """
+    _log_call("set_function_type", address=address)
     code = _ADDR_PARSE + f"""
 import idc
 ea = _parse_addr({address!r})
