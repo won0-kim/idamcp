@@ -103,6 +103,7 @@ def _generate_loader(deps_dir: str) -> str:
             help = "Exposes IDA Python execution via MCP over SSE"
             wanted_name = "IDAMCP"
             wanted_hotkey = "Ctrl-Shift-M"
+            _server = None
 
             def init(self):
                 try:

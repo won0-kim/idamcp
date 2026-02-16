@@ -12,6 +12,7 @@ class IdaMcpPlugin(ida_idaapi.plugin_t):
     help = "Exposes IDA Python execution via MCP over SSE"
     wanted_name = "IDAMCP"
     wanted_hotkey = "Ctrl-Shift-M"
+    _server: McpServerRunner | None = None
 
     def init(self) -> int:
         self._server = McpServerRunner(DEFAULT_HOST, DEFAULT_PORT)
