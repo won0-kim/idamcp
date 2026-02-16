@@ -21,6 +21,7 @@ import textwrap
 
 DEFAULT_IDA_DIR = r"C:\Program Files\IDA Professional 9.0"
 PLUGIN_FILENAME = "idamcp_plugin.py"
+USER_PLUGINS_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "Hex-Rays", "IDA Pro", "plugins")
 DEPS_DIRNAME = "idamcp_deps"
 
 
@@ -142,11 +143,8 @@ def _generate_loader(deps_dir: str) -> str:
 
 def _install(ida_dir: str, python_override: str | None) -> None:
     project_dir = os.path.dirname(os.path.abspath(__file__))
-    plugins_dir = os.path.join(ida_dir, "plugins")
-
-    if not os.path.isdir(plugins_dir):
-        print(f"Error: plugins directory not found: {plugins_dir}", file=sys.stderr)
-        sys.exit(1)
+    plugins_dir = USER_PLUGINS_DIR
+    os.makedirs(plugins_dir, exist_ok=True)
 
     # 1. Find IDA's Python
     if python_override:
@@ -178,7 +176,7 @@ def _install(ida_dir: str, python_override: str | None) -> None:
         shutil.rmtree(deps_dir)
 
     # 4. Install project + all dependencies into deps_dir
-    print("  Installing idamcp and dependencies...")
+    print(f"  Installing idamcp and dependencies to {deps_dir} ...")
     subprocess.run(
         [
             python_exe, "-m", "pip", "install",
@@ -201,7 +199,7 @@ def _install(ida_dir: str, python_override: str | None) -> None:
 
 
 def _uninstall(ida_dir: str) -> None:
-    plugins_dir = os.path.join(ida_dir, "plugins")
+    plugins_dir = USER_PLUGINS_DIR
     target = os.path.join(plugins_dir, PLUGIN_FILENAME)
     deps_dir = os.path.join(plugins_dir, DEPS_DIRNAME)
 
