@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 
 import uvicorn
@@ -22,7 +23,7 @@ def _log_call(name: str, **kwargs: object) -> None:
     ida_kernwin.msg(f"[IDAMCP] {name}({args})\n")
 
 DEFAULT_HOST = "127.0.0.1"
-DEFAULT_PORT = 13337
+DEFAULT_PORT = int(os.environ.get("IDAMCP_PORT", "13337"))
 
 mcp = FastMCP("idamcp")
 
@@ -309,9 +310,9 @@ segments = []
 for ea in idautils.Segments():
     seg = ida_segment.getseg(ea)
     perms = ""
-    perms += "r" if seg.perm & ida_segment.SFL_READ else "-"
-    perms += "w" if seg.perm & ida_segment.SFL_WRITE else "-"
-    perms += "x" if seg.perm & ida_segment.SFL_EXEC else "-"
+    perms += "r" if seg.perm & ida_segment.SEGPERM_READ else "-"
+    perms += "w" if seg.perm & ida_segment.SEGPERM_WRITE else "-"
+    perms += "x" if seg.perm & ida_segment.SEGPERM_EXEC else "-"
     segments.append({
         "name": idc.get_segm_name(ea),
         "start": hex(seg.start_ea),
