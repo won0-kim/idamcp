@@ -70,13 +70,16 @@ async def execute_script(code: str) -> str:
 
 
 @mcp.tool()
-async def get_function_list(filter_pattern: str = "") -> str:
+async def get_function_list(filter_pattern: str = "", limit: int = 100) -> str:
     """List all functions in the binary.
 
     Returns JSON array of {"address": "0x...", "name": "..."}.
-    Optionally filter by glob pattern (e.g. "sub_*", "*main*").
+
+    Args:
+        filter_pattern: Glob pattern to filter function names (e.g. "sub_*", "*main*").
+        limit: Maximum number of results to return (default 100, 0 for all).
     """
-    _log_call("get_function_list", filter=filter_pattern)
+    _log_call("get_function_list", filter=filter_pattern, limit=limit)
     code = """
 import json, idautils, idc
 functions = []
@@ -88,6 +91,8 @@ for ea in idautils.Functions():
 import fnmatch
 functions = [f for f in functions if fnmatch.fnmatch(f["name"], {filter_pattern!r})]
 """
+    if limit:
+        code += f"functions = functions[:{limit!r}]\n"
     code += "__result__ = json.dumps(functions)\n"
     result = await execute_ida_script(code)
     return format_result(result)
@@ -160,10 +165,11 @@ async def get_xrefs_to(address: str) -> str:
     _log_call("get_xrefs_to", address=address)
     code = _ADDR_PARSE + f"""
 import json, idautils, ida_xref
+_XREF_TYPES = {{v: k for k, v in vars(ida_xref).items() if k.startswith(("fl_", "dr_"))}}
 ea = _parse_addr({address!r})
 xrefs = []
 for x in idautils.XrefsTo(ea):
-    xrefs.append({{"from": hex(x.frm), "type": ida_xref.get_xref_type_name(x.type), "is_code": bool(x.iscode)}})
+    xrefs.append({{"from": hex(x.frm), "type": _XREF_TYPES.get(x.type, str(x.type)), "is_code": bool(x.iscode)}})
 __result__ = json.dumps(xrefs)
 """
     result = await execute_ida_script(code)
@@ -182,10 +188,11 @@ async def get_xrefs_from(address: str) -> str:
     _log_call("get_xrefs_from", address=address)
     code = _ADDR_PARSE + f"""
 import json, idautils, ida_xref
+_XREF_TYPES = {{v: k for k, v in vars(ida_xref).items() if k.startswith(("fl_", "dr_"))}}
 ea = _parse_addr({address!r})
 xrefs = []
 for x in idautils.XrefsFrom(ea):
-    xrefs.append({{"to": hex(x.to), "type": ida_xref.get_xref_type_name(x.type), "is_code": bool(x.iscode)}})
+    xrefs.append({{"to": hex(x.to), "type": _XREF_TYPES.get(x.type, str(x.type)), "is_code": bool(x.iscode)}})
 __result__ = json.dumps(xrefs)
 """
     result = await execute_ida_script(code)
@@ -193,34 +200,48 @@ __result__ = json.dumps(xrefs)
 
 
 @mcp.tool()
-async def get_strings(min_length: int = 4) -> str:
+async def get_strings(filter_pattern: str = "", min_length: int = 4, limit: int = 100) -> str:
     """List strings found in the binary.
 
     Returns JSON array of {"address": "0x...", "value": "...", "length": N}.
 
     Args:
+        filter_pattern: Glob pattern to filter string values (e.g. "*error*", "*http*").
         min_length: Minimum string length to include (default 4).
+        limit: Maximum number of results to return (default 100, 0 for all).
     """
-    _log_call("get_strings", min_length=min_length)
+    _log_call("get_strings", filter=filter_pattern, min_length=min_length, limit=limit)
     code = f"""
 import json, idautils
 strings = []
 for s in idautils.Strings():
     if s.length >= {min_length!r}:
         strings.append({{"address": hex(s.ea), "value": str(s), "length": s.length}})
-__result__ = json.dumps(strings)
 """
+    if filter_pattern:
+        code += f"""
+import fnmatch
+strings = [s for s in strings if fnmatch.fnmatch(s["value"], {filter_pattern!r})]
+"""
+    if limit:
+        code += f"strings = strings[:{limit!r}]\n"
+    code += "__result__ = json.dumps(strings)\n"
     result = await execute_ida_script(code)
     return format_result(result)
 
 
 @mcp.tool()
-async def get_imports() -> str:
+async def get_imports(filter_pattern: str = "", module: str = "", limit: int = 100) -> str:
     """List all imported functions.
 
     Returns JSON array of {"module": "...", "name": "...", "address": "0x...", "ordinal": N}.
+
+    Args:
+        filter_pattern: Glob pattern to filter function names (e.g. "*Create*", "Nt*").
+        module: Filter by module name (e.g. "kernel32", "ntdll"). Case-insensitive.
+        limit: Maximum number of results to return (default 100, 0 for all).
     """
-    _log_call("get_imports")
+    _log_call("get_imports", filter=filter_pattern, module=module, limit=limit)
     code = """
 import json, ida_nalt
 
@@ -233,27 +254,50 @@ def _cb(ea, name, ordinal):
 for i in range(ida_nalt.get_import_module_qty()):
     _cur_mod = ida_nalt.get_import_module_name(i)
     ida_nalt.enum_import_names(i, _cb)
-
-__result__ = json.dumps(imports)
 """
+    if module:
+        code += f"""
+imports = [i for i in imports if {module!r}.lower() in i["module"].lower()]
+"""
+    if filter_pattern:
+        code += f"""
+import fnmatch
+imports = [i for i in imports if fnmatch.fnmatch(i["name"], {filter_pattern!r})]
+"""
+    if limit:
+        code += f"imports = imports[:{limit!r}]\n"
+    code += "__result__ = json.dumps(imports)\n"
     result = await execute_ida_script(code)
     return format_result(result)
 
 
 @mcp.tool()
-async def get_exports() -> str:
+async def get_exports(filter_pattern: str = "", limit: int = 100) -> str:
     """List all exported functions/symbols.
 
     Returns JSON array of {"ordinal": N, "address": "0x...", "name": "..."}.
+
+    Args:
+        filter_pattern: Glob pattern to filter export names (e.g. "*Create*", "Dll*").
+        limit: Maximum number of results to return (default 100, 0 for all).
     """
-    _log_call("get_exports")
+    _log_call("get_exports", filter=filter_pattern, limit=limit)
     code = """
 import json, idautils
 exports = []
-for ordinal, ea, name in idautils.Entries():
-    exports.append({"ordinal": ordinal, "address": hex(ea), "name": name})
-__result__ = json.dumps(exports)
+for entry in idautils.Entries():
+    # IDA 9.0: (index, ordinal, ea, name), older: (ordinal, ea, name)
+    ordinal, ea, name = entry[-3], entry[-2], entry[-1]
+    exports.append({"ordinal": ordinal, "address": hex(ea), "name": name or ""})
 """
+    if filter_pattern:
+        code += f"""
+import fnmatch
+exports = [e for e in exports if fnmatch.fnmatch(e["name"], {filter_pattern!r})]
+"""
+    if limit:
+        code += f"exports = exports[:{limit!r}]\n"
+    code += "__result__ = json.dumps(exports)\n"
     result = await execute_ida_script(code)
     return format_result(result)
 
@@ -319,7 +363,7 @@ for ea in idautils.Segments():
         "end": hex(seg.end_ea),
         "size": seg.end_ea - seg.start_ea,
         "permissions": perms,
-        "class": idc.get_segm_class(ea),
+        "class": ida_segment.get_segm_class(seg),
     })
 __result__ = json.dumps(segments, indent=2)
 """
@@ -377,22 +421,12 @@ else:
     if func is None:
         __result__ = f"Error: No function at {{hex(ea)}}"
     else:
-        try:
+        if ida_hexrays.rename_lvar(func.start_ea, {old_name!r}, {new_name!r}):
+            __result__ = f"Renamed '{old_name!r}' to {new_name!r} in {{hex(func.start_ea)}}"
+        else:
             cfunc = ida_hexrays.decompile(func.start_ea)
-            found = False
-            for lvar in cfunc.lvars:
-                if lvar.name == {old_name!r}:
-                    if cfunc.rename_lvar(lvar, {new_name!r}):
-                        __result__ = f"Renamed '{{lvar.name}}' to {new_name!r} in {{hex(func.start_ea)}}"
-                    else:
-                        __result__ = f"Error: Failed to rename '{old_name!r}'"
-                    found = True
-                    break
-            if not found:
-                names = [lv.name for lv in cfunc.lvars]
-                __result__ = f"Error: Variable {old_name!r} not found. Available: {{names}}"
-        except ida_hexrays.DecompilationFailure as e:
-            __result__ = f"Error: Decompilation failed: {{e}}"
+            names = [lv.name for lv in cfunc.lvars]
+            __result__ = f"Error: Failed to rename. Available variables: {{names}}"
 """
     result = await execute_ida_script(code)
     return format_result(result)
