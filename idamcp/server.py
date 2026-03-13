@@ -25,6 +25,16 @@ def _log_call(name: str, **kwargs: object) -> None:
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = int(os.environ.get("IDAMCP_PORT", "13337"))
 
+
+def _paginate_code(var: str, offset: int, limit: int) -> str:
+    """Return Python code snippet that slices *var* by offset/limit."""
+    parts = ""
+    if offset:
+        parts += f"{var} = {var}[{offset!r}:]\n"
+    if limit:
+        parts += f"{var} = {var}[:{limit!r}]\n"
+    return parts
+
 mcp = FastMCP("idamcp")
 
 
@@ -70,16 +80,17 @@ async def execute_script(code: str) -> str:
 
 
 @mcp.tool()
-async def get_function_list(filter_pattern: str = "", limit: int = 100) -> str:
+async def get_function_list(filter_pattern: str = "", offset: int = 0, limit: int = 100) -> str:
     """List all functions in the binary.
 
     Returns JSON array of {"address": "0x...", "name": "..."}.
 
     Args:
         filter_pattern: Glob pattern to filter function names (e.g. "sub_*", "*main*").
+        offset: Number of results to skip for pagination (default 0).
         limit: Maximum number of results to return (default 100, 0 for all).
     """
-    _log_call("get_function_list", filter=filter_pattern, limit=limit)
+    _log_call("get_function_list", filter=filter_pattern, offset=offset, limit=limit)
     code = """
 import json, idautils, idc
 functions = []
@@ -91,8 +102,7 @@ for ea in idautils.Functions():
 import fnmatch
 functions = [f for f in functions if fnmatch.fnmatch(f["name"], {filter_pattern!r})]
 """
-    if limit:
-        code += f"functions = functions[:{limit!r}]\n"
+    code += _paginate_code("functions", offset, limit)
     code += "__result__ = json.dumps(functions)\n"
     result = await execute_ida_script(code)
     return format_result(result)
@@ -154,15 +164,17 @@ __result__ = "\\n".join(lines)
 
 
 @mcp.tool()
-async def get_xrefs_to(address: str) -> str:
+async def get_xrefs_to(address: str, offset: int = 0, limit: int = 100) -> str:
     """Get cross-references TO the given address.
 
     Returns JSON array of {"from": "0x...", "type": "...", "is_code": bool}.
 
     Args:
         address: Target address (hex string or name).
+        offset: Number of results to skip for pagination (default 0).
+        limit: Maximum number of results to return (default 100, 0 for all).
     """
-    _log_call("get_xrefs_to", address=address)
+    _log_call("get_xrefs_to", address=address, offset=offset, limit=limit)
     code = _ADDR_PARSE + f"""
 import json, idautils, ida_xref
 _XREF_TYPES = {{v: k for k, v in vars(ida_xref).items() if k.startswith(("fl_", "dr_"))}}
@@ -170,22 +182,25 @@ ea = _parse_addr({address!r})
 xrefs = []
 for x in idautils.XrefsTo(ea):
     xrefs.append({{"from": hex(x.frm), "type": _XREF_TYPES.get(x.type, str(x.type)), "is_code": bool(x.iscode)}})
-__result__ = json.dumps(xrefs)
 """
+    code += _paginate_code("xrefs", offset, limit)
+    code += "__result__ = json.dumps(xrefs)\n"
     result = await execute_ida_script(code)
     return format_result(result)
 
 
 @mcp.tool()
-async def get_xrefs_from(address: str) -> str:
+async def get_xrefs_from(address: str, offset: int = 0, limit: int = 100) -> str:
     """Get cross-references FROM the given address.
 
     Returns JSON array of {"to": "0x...", "type": "...", "is_code": bool}.
 
     Args:
         address: Source address (hex string or name).
+        offset: Number of results to skip for pagination (default 0).
+        limit: Maximum number of results to return (default 100, 0 for all).
     """
-    _log_call("get_xrefs_from", address=address)
+    _log_call("get_xrefs_from", address=address, offset=offset, limit=limit)
     code = _ADDR_PARSE + f"""
 import json, idautils, ida_xref
 _XREF_TYPES = {{v: k for k, v in vars(ida_xref).items() if k.startswith(("fl_", "dr_"))}}
@@ -193,14 +208,15 @@ ea = _parse_addr({address!r})
 xrefs = []
 for x in idautils.XrefsFrom(ea):
     xrefs.append({{"to": hex(x.to), "type": _XREF_TYPES.get(x.type, str(x.type)), "is_code": bool(x.iscode)}})
-__result__ = json.dumps(xrefs)
 """
+    code += _paginate_code("xrefs", offset, limit)
+    code += "__result__ = json.dumps(xrefs)\n"
     result = await execute_ida_script(code)
     return format_result(result)
 
 
 @mcp.tool()
-async def get_strings(filter_pattern: str = "", min_length: int = 4, limit: int = 100) -> str:
+async def get_strings(filter_pattern: str = "", min_length: int = 4, offset: int = 0, limit: int = 100) -> str:
     """List strings found in the binary.
 
     Returns JSON array of {"address": "0x...", "value": "...", "length": N}.
@@ -208,9 +224,10 @@ async def get_strings(filter_pattern: str = "", min_length: int = 4, limit: int 
     Args:
         filter_pattern: Glob pattern to filter string values (e.g. "*error*", "*http*").
         min_length: Minimum string length to include (default 4).
+        offset: Number of results to skip for pagination (default 0).
         limit: Maximum number of results to return (default 100, 0 for all).
     """
-    _log_call("get_strings", filter=filter_pattern, min_length=min_length, limit=limit)
+    _log_call("get_strings", filter=filter_pattern, min_length=min_length, offset=offset, limit=limit)
     code = f"""
 import json, idautils
 strings = []
@@ -223,15 +240,14 @@ for s in idautils.Strings():
 import fnmatch
 strings = [s for s in strings if fnmatch.fnmatch(s["value"], {filter_pattern!r})]
 """
-    if limit:
-        code += f"strings = strings[:{limit!r}]\n"
+    code += _paginate_code("strings", offset, limit)
     code += "__result__ = json.dumps(strings)\n"
     result = await execute_ida_script(code)
     return format_result(result)
 
 
 @mcp.tool()
-async def get_imports(filter_pattern: str = "", module: str = "", limit: int = 100) -> str:
+async def get_imports(filter_pattern: str = "", module: str = "", offset: int = 0, limit: int = 100) -> str:
     """List all imported functions.
 
     Returns JSON array of {"module": "...", "name": "...", "address": "0x...", "ordinal": N}.
@@ -239,9 +255,10 @@ async def get_imports(filter_pattern: str = "", module: str = "", limit: int = 1
     Args:
         filter_pattern: Glob pattern to filter function names (e.g. "*Create*", "Nt*").
         module: Filter by module name (e.g. "kernel32", "ntdll"). Case-insensitive.
+        offset: Number of results to skip for pagination (default 0).
         limit: Maximum number of results to return (default 100, 0 for all).
     """
-    _log_call("get_imports", filter=filter_pattern, module=module, limit=limit)
+    _log_call("get_imports", filter=filter_pattern, module=module, offset=offset, limit=limit)
     code = """
 import json, ida_nalt
 
@@ -264,24 +281,24 @@ imports = [i for i in imports if {module!r}.lower() in i["module"].lower()]
 import fnmatch
 imports = [i for i in imports if fnmatch.fnmatch(i["name"], {filter_pattern!r})]
 """
-    if limit:
-        code += f"imports = imports[:{limit!r}]\n"
+    code += _paginate_code("imports", offset, limit)
     code += "__result__ = json.dumps(imports)\n"
     result = await execute_ida_script(code)
     return format_result(result)
 
 
 @mcp.tool()
-async def get_exports(filter_pattern: str = "", limit: int = 100) -> str:
+async def get_exports(filter_pattern: str = "", offset: int = 0, limit: int = 100) -> str:
     """List all exported functions/symbols.
 
     Returns JSON array of {"ordinal": N, "address": "0x...", "name": "..."}.
 
     Args:
         filter_pattern: Glob pattern to filter export names (e.g. "*Create*", "Dll*").
+        offset: Number of results to skip for pagination (default 0).
         limit: Maximum number of results to return (default 100, 0 for all).
     """
-    _log_call("get_exports", filter=filter_pattern, limit=limit)
+    _log_call("get_exports", filter=filter_pattern, offset=offset, limit=limit)
     code = """
 import json, idautils
 exports = []
@@ -295,8 +312,7 @@ for entry in idautils.Entries():
 import fnmatch
 exports = [e for e in exports if fnmatch.fnmatch(e["name"], {filter_pattern!r})]
 """
-    if limit:
-        code += f"exports = exports[:{limit!r}]\n"
+    code += _paginate_code("exports", offset, limit)
     code += "__result__ = json.dumps(exports)\n"
     result = await execute_ida_script(code)
     return format_result(result)
@@ -386,12 +402,24 @@ async def rename_function(address: str, new_name: str) -> str:
     """
     _log_call("rename_function", address=address, new_name=new_name)
     code = _ADDR_PARSE + f"""
-import idc
+import idc, ida_name
 ea = _parse_addr({address!r})
-if idc.set_name(ea, {new_name!r}, idc.SN_CHECK):
-    __result__ = f"Renamed function at {{hex(ea)}} to {new_name!r}"
+new_name = {new_name!r}
+# Pre-check: if the name already exists at a different address, report error
+# without triggering IDA's modal dialog.
+existing = idc.get_name_ea_simple(new_name)
+if existing not in (idc.BADADDR, ea):
+    __result__ = (
+        f"Error: Name '{{new_name}}' is already used at {{hex(existing)}}. "
+        f"Choose a different name."
+    )
 else:
-    __result__ = f"Error: Failed to rename function at {{hex(ea)}} to {new_name!r}"
+    # SN_NOCHECK skips IDA's interactive validation (avoids blocking dialogs).
+    # SN_NOWARN suppresses warning popups.
+    if ida_name.set_name(ea, new_name, ida_name.SN_NOCHECK | ida_name.SN_NOWARN):
+        __result__ = f"Renamed function at {{hex(ea)}} to '{{new_name}}'"
+    else:
+        __result__ = f"Error: Failed to rename function at {{hex(ea)}} to '{{new_name}}'"
 """
     result = await execute_ida_script(code)
     return format_result(result)

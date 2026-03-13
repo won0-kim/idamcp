@@ -177,11 +177,14 @@ def _install(ida_dir: str, python_override: str | None) -> None:
         shutil.rmtree(deps_dir)
 
     # 4. Install project + all dependencies into deps_dir
+    #    --ignore-requires-python: IDA's Python version may be older than
+    #    what pyproject.toml declares; the code is compatible regardless.
     print(f"  Installing idamcp and dependencies to {deps_dir} ...")
     subprocess.run(
         [
             python_exe, "-m", "pip", "install",
             "--target", deps_dir,
+            "--ignore-requires-python",
             project_dir,
         ],
         check=True,
