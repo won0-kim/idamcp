@@ -481,6 +481,77 @@ __result__ = f"Comment set at {{hex(ea)}}"
 
 
 @mcp.tool()
+async def create_struct(definition: str) -> str:
+    """Create or update a structure type from a C-style definition.
+
+    The definition is parsed and added to IDA's local type library.
+
+    Args:
+        definition: C struct definition (e.g. "struct my_struct { int x; char *name; };").
+    """
+    _log_call("create_struct")
+    code = f"""
+import re, ida_typeinf
+
+til = ida_typeinf.get_idati()
+m = re.search(r'struct\\s+(\\w+)', {definition!r})
+name = m.group(1) if m else "unknown"
+
+# Check if struct already exists
+tif = ida_typeinf.tinfo_t()
+existed = tif.get_named_type(til, name)
+
+# If updating, collect dependents that reference this struct so we can refresh them
+dep_defs = {{}}
+if existed:
+    count = ida_typeinf.get_ordinal_count(til)
+    for _i in range(1, count + 1):
+        _t = ida_typeinf.tinfo_t()
+        if not _t.get_numbered_type(til, _i):
+            continue
+        _n = _t.get_type_name()
+        if not _n or _n == name or not _t.is_udt():
+            continue
+        _si = ida_typeinf.udt_type_data_t()
+        if not _t.get_udt_details(_si):
+            continue
+        for _j in range(_si.size()):
+            if name in str(_si[_j].type):
+                dep_defs[_n] = str(_t)
+                break
+
+errors = ida_typeinf.idc_parse_types({definition!r}, 0)
+if errors == 0:
+    # Re-parse dependents to fix references broken by the update
+    refreshed = []
+    for dep_name, dep_str in dep_defs.items():
+        dep_def = f"struct {{dep_name}} {{dep_str}};"
+        if ida_typeinf.idc_parse_types(dep_def, 0) == 0:
+            refreshed.append(dep_name)
+
+    action = "Updated" if existed else "Created"
+    tif2 = ida_typeinf.tinfo_t()
+    if tif2.get_named_type(til, name):
+        members = []
+        si = ida_typeinf.udt_type_data_t()
+        if tif2.get_udt_details(si):
+            for i in range(si.size()):
+                mem = si[i]
+                members.append(f"  +{{mem.offset // 8:#x}} {{mem.type}} {{mem.name}}")
+        msg = f"{{action}} struct '{{name}}' ({{tif2.get_size()}} bytes):\\n" + "\\n".join(members)
+        if refreshed:
+            msg += f"\\nRefreshed dependents: {{', '.join(refreshed)}}"
+        __result__ = msg
+    else:
+        __result__ = f"{{action}} struct '{{name}}'"
+else:
+    __result__ = f"Error: Failed to parse definition ({{errors}} error(s)). Check C syntax."
+"""
+    result = await execute_ida_script(code)
+    return format_result(result)
+
+
+@mcp.tool()
 async def set_function_type(address: str, type_string: str) -> str:
     """Set a function's type/prototype signature.
 
