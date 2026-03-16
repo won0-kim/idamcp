@@ -17,7 +17,6 @@ class IdaMcpPlugin(ida_idaapi.plugin_t):
     def init(self) -> int:
         self._server = McpServerRunner(DEFAULT_HOST, DEFAULT_PORT)
         self._server.start()
-        ida_kernwin.msg(f"[IDAMCP] Server started at http://{DEFAULT_HOST}:{DEFAULT_PORT}/sse\n")
         return ida_idaapi.PLUGIN_KEEP
 
     def run(self, arg: int) -> bool:
@@ -26,9 +25,6 @@ class IdaMcpPlugin(ida_idaapi.plugin_t):
             ida_kernwin.msg("[IDAMCP] Server stopped\n")
         else:
             self._server.start()
-            ida_kernwin.msg(
-                f"[IDAMCP] Server started at http://{DEFAULT_HOST}:{DEFAULT_PORT}/sse\n"
-            )
         return True
 
     def term(self) -> None:

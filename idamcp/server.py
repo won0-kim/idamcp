@@ -501,12 +501,19 @@ else:
     return format_result(result)
 
 
+MAX_PORT_ATTEMPTS = 10
+
+
 class McpServerRunner:
     def __init__(self, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
         self._host = host
         self._port = port
         self._server: uvicorn.Server | None = None
         self._thread: threading.Thread | None = None
+
+    @property
+    def port(self) -> int:
+        return self._port
 
     @property
     def is_running(self) -> bool:
@@ -519,18 +526,37 @@ class McpServerRunner:
         self._thread.start()
 
     def _run(self) -> None:
+        import socket
+
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
             app = mcp.sse_app()
-            config = uvicorn.Config(
-                app,
-                host=self._host,
-                port=self._port,
-                log_level="warning",
+            base_port = self._port
+            for attempt in range(MAX_PORT_ATTEMPTS):
+                port = base_port + attempt
+                try:
+                    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                        s.bind((self._host, port))
+                except OSError:
+                    continue
+                self._port = port
+                ida_kernwin.msg(
+                    f"[IDAMCP] Server started at http://{self._host}:{port}/sse\n"
+                )
+                config = uvicorn.Config(
+                    app,
+                    host=self._host,
+                    port=port,
+                    log_level="warning",
+                )
+                self._server = uvicorn.Server(config)
+                loop.run_until_complete(self._server.serve())
+                return
+            ida_kernwin.msg(
+                f"[IDAMCP] Failed to bind any port in range "
+                f"{base_port}–{base_port + MAX_PORT_ATTEMPTS - 1}\n"
             )
-            self._server = uvicorn.Server(config)
-            loop.run_until_complete(self._server.serve())
         finally:
             loop.close()
 
