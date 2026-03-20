@@ -28,6 +28,9 @@ def _execute_on_main_thread(code: str) -> ExecutionResult:
         captured_out, captured_err = io.StringIO(), io.StringIO()
         sys.stdout, sys.stderr = captured_out, captured_err
         old_batch = idc.batch(1)
+        # Snapshot IDA output window line count before execution
+        pre_lines = ida_kernwin.msg_get_lines(-1)
+        pre_count = len(pre_lines)
         try:
             exec_globals: dict[str, object] = {}
             exec(code, exec_globals)
@@ -53,6 +56,15 @@ def _execute_on_main_thread(code: str) -> ExecutionResult:
         finally:
             idc.batch(old_batch)
             sys.stdout, sys.stderr = old_stdout, old_stderr
+            # Capture new IDA output messages emitted during execution
+            post_lines = ida_kernwin.msg_get_lines(-1)
+            new_count = len(post_lines) - pre_count
+            if new_count > 0 and result_holder:
+                # post_lines is reversed (newest first), take the new ones
+                ida_msgs = "\n".join(reversed(post_lines[:new_count]))
+                result_holder[0].stderr = (
+                    (result_holder[0].stderr + "\n" + ida_msgs).strip()
+                )
         return 1
 
     ida_kernwin.execute_sync(_runner, ida_kernwin.MFF_WRITE)
