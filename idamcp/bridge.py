@@ -22,9 +22,12 @@ def _execute_on_main_thread(code: str) -> ExecutionResult:
     result_holder: list[ExecutionResult] = []
 
     def _runner():
+        import idc
+
         old_stdout, old_stderr = sys.stdout, sys.stderr
         captured_out, captured_err = io.StringIO(), io.StringIO()
         sys.stdout, sys.stderr = captured_out, captured_err
+        old_batch = idc.batch(1)
         try:
             exec_globals: dict[str, object] = {}
             exec(code, exec_globals)
@@ -48,6 +51,7 @@ def _execute_on_main_thread(code: str) -> ExecutionResult:
                 )
             )
         finally:
+            idc.batch(old_batch)
             sys.stdout, sys.stderr = old_stdout, old_stderr
         return 1
 
