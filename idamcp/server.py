@@ -22,7 +22,7 @@ def _log_call(name: str, **kwargs: object) -> None:
     args = ", ".join(f"{k}={v}" for k, v in kwargs.items() if v)
     ida_kernwin.msg(f"[IDAMCP] {name}({args})\n")
 
-DEFAULT_HOST = "127.0.0.1"
+DEFAULT_HOST = os.environ.get("IDAMCP_HOST", "127.0.0.1")
 DEFAULT_PORT = int(os.environ.get("IDAMCP_PORT", "13337"))
 
 
