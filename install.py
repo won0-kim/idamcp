@@ -134,7 +134,18 @@ def _install(ida_dir: str, python_override: str | None) -> None:
     deps_dir = os.path.join(plugins_dir, DEPS_DIRNAME)
     if os.path.isdir(deps_dir):
         print("  Removing previous install...")
-        shutil.rmtree(deps_dir)
+        try:
+            shutil.rmtree(deps_dir)
+        except PermissionError:
+            # IDA may be locking .pyd/.dll files — rename aside for manual cleanup
+            import glob, time
+            # Try to clean up previous .old_* dirs
+            for old in glob.glob(deps_dir + ".old_*"):
+                shutil.rmtree(old, ignore_errors=True)
+            old_dir = f"{deps_dir}.old_{int(time.time())}"
+            os.rename(deps_dir, old_dir)
+            print(f"  Warning: Could not remove (files locked by IDA?).")
+            print(f"  Renamed to {old_dir} — delete it after closing IDA.")
 
     # 4. Install project + all dependencies into deps_dir
     #    --ignore-requires-python: IDA's Python version may be older than

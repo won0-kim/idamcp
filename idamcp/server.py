@@ -50,7 +50,7 @@ def _parse_addr(s):
         ea = idc.get_name_ea_simple(s)
         if ea != idc.BADADDR:
             return ea
-        return int(s, 16)
+        raise ValueError(f"Unknown name: '{s}' not found in the database")
 """
 
 
@@ -322,14 +322,15 @@ exports = [e for e in exports if fnmatch.fnmatch(e["name"], {filter_pattern!r})]
 async def get_function_info(address: str) -> str:
     """Get detailed information about a function.
 
-    Returns JSON with name, start/end address, size, flags, prototype, frame info.
+    Returns JSON with name, start/end address, size, flags, prototype, frame info,
+    and global_vars (named global variables/constants referenced by the function).
 
     Args:
         address: Function address (hex string or name).
     """
     _log_call("get_function_info", address=address)
     code = _ADDR_PARSE + f"""
-import json, ida_funcs, idc
+import json, ida_funcs, idc, idautils
 
 ea = _parse_addr({address!r})
 func = ida_funcs.get_func(ea)
@@ -349,7 +350,55 @@ else:
         "is_library": bool(func.flags & ida_funcs.FUNC_LIB),
         "is_thunk": bool(func.flags & ida_funcs.FUNC_THUNK),
     }}
+
+    global_vars = {{}}
+    import ida_name, re as _re
+    seen = set()
+    for head in idautils.Heads(func.start_ea, func.end_ea):
+        for dref in idautils.DataRefsFrom(head):
+            if dref in seen:
+                continue
+            seen.add(dref)
+            name = ida_name.get_name(dref)
+            if not name:
+                continue
+            if _re.match(r'^(dword|off|unk|byte|word|qword|loc|flt|stru|sub)_[0-9A-Fa-f]+$', name):
+                continue
+            global_vars[name] = hex(dref)
+    if global_vars:
+        info["global_vars"] = global_vars
     __result__ = json.dumps(info, indent=2)
+"""
+    result = await execute_ida_script(code)
+    return format_result(result)
+
+
+@mcp.tool()
+async def examine(address: str, count: int = 30) -> str:
+    """Examine an address in IDA view format — works for both code and data.
+
+    Shows exactly what IDA displays: disassembly for code, data definitions
+    (DCB, DCD, etc.) for data, with names and comments. Use this to inspect
+    global variables, data structures, jump tables, or any unknown address.
+
+    Args:
+        address: Address (hex string or name).
+        count: Number of lines to show (default 30).
+    """
+    _log_call("examine", address=address, count=count)
+    code = _ADDR_PARSE + f"""
+import idc
+ea = _parse_addr({address!r})
+lines = []
+for _ in range({count!r}):
+    if ea == idc.BADADDR:
+        break
+    name = idc.get_name(ea)
+    disasm = idc.generate_disasm_line(ea, 0)
+    prefix = f"{{name}}:" if name else ""
+    lines.append(f"{{hex(ea)}}  {{prefix:<30s}} {{disasm}}")
+    ea = idc.next_head(ea)
+__result__ = "\\n".join(lines)
 """
     result = await execute_ida_script(code)
     return format_result(result)
