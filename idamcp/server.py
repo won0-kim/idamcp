@@ -442,20 +442,18 @@ __result__ = json.dumps(segments, indent=2)
 
 
 @mcp.tool()
-async def rename_function(address: str, new_name: str) -> str:
-    """Rename a function at the given address.
+async def rename(address: str, new_name: str) -> str:
+    """Rename any address — functions, global variables, labels, data, etc.
 
     Args:
-        address: Function address (hex string or name).
-        new_name: New name for the function.
+        address: Address (hex string or current name).
+        new_name: New name.
     """
-    _log_call("rename_function", address=address, new_name=new_name)
+    _log_call("rename", address=address, new_name=new_name)
     code = _ADDR_PARSE + f"""
 import idc, ida_name
 ea = _parse_addr({address!r})
 new_name = {new_name!r}
-# Pre-check: if the name already exists at a different address, report error
-# without triggering IDA's modal dialog.
 existing = idc.get_name_ea_simple(new_name)
 if existing not in (idc.BADADDR, ea):
     __result__ = (
@@ -463,12 +461,10 @@ if existing not in (idc.BADADDR, ea):
         f"Choose a different name."
     )
 else:
-    # SN_NOCHECK skips IDA's interactive validation (avoids blocking dialogs).
-    # SN_NOWARN suppresses warning popups.
     if ida_name.set_name(ea, new_name, ida_name.SN_NOCHECK | ida_name.SN_NOWARN):
-        __result__ = f"Renamed function at {{hex(ea)}} to '{{new_name}}'"
+        __result__ = f"Renamed {{hex(ea)}} to '{{new_name}}'"
     else:
-        __result__ = f"Error: Failed to rename function at {{hex(ea)}} to '{{new_name}}'"
+        __result__ = f"Error: Failed to rename {{hex(ea)}} to '{{new_name}}'"
 """
     result = await execute_ida_script(code)
     return format_result(result)
