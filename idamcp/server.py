@@ -617,15 +617,24 @@ else:
     return format_result(result)
 
 
-MAX_PORT_ATTEMPTS = 10
-
-
 class McpServerRunner:
-    def __init__(self, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
+    def __init__(
+        self,
+        host: str = DEFAULT_HOST,
+        port: int = DEFAULT_PORT,
+        reserved_ports: set[int] | None = None,
+        fixed_port: bool = False,
+    ):
         self._host = host
         self._port = port
+        self._reserved_ports = reserved_ports or set()
+        self._fixed_port = fixed_port
         self._server: uvicorn.Server | None = None
         self._thread: threading.Thread | None = None
+
+    @property
+    def host(self) -> str:
+        return self._host
 
     @property
     def port(self) -> int:
@@ -648,32 +657,59 @@ class McpServerRunner:
         asyncio.set_event_loop(loop)
         try:
             app = mcp.sse_app()
-            base_port = self._port
-            for attempt in range(MAX_PORT_ATTEMPTS):
-                port = base_port + attempt
+
+            if self._fixed_port:
+                # Use the exact saved port — do not auto-allocate
                 try:
                     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                        s.bind((self._host, port))
+                        s.bind((self._host, self._port))
                 except OSError:
-                    continue
-                self._port = port
-                ida_kernwin.msg(
-                    f"[IDAMCP] Server started at http://{self._host}:{port}/sse\n"
-                )
-                config = uvicorn.Config(
-                    app,
-                    host=self._host,
-                    port=port,
-                    log_level="warning",
-                )
-                self._server = uvicorn.Server(config)
-                loop.run_until_complete(self._server.serve())
-                return
+                    ida_kernwin.msg(
+                        f"[IDAMCP] Failed to bind saved port {self._port}\n"
+                    )
+                    return
+                port = self._port
+            else:
+                # Auto-allocate: scan upward from base port, skip reserved ports
+                port = self._port
+                bound = False
+                while port <= 65535:
+                    if port in self._reserved_ports:
+                        port += 1
+                        continue
+                    try:
+                        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                            s.bind((self._host, port))
+                        bound = True
+                        break
+                    except OSError:
+                        port += 1
+                if not bound:
+                    ida_kernwin.msg(
+                        f"[IDAMCP] Failed to bind any port starting from {self._port}\n"
+                    )
+                    return
+
+            self._port = port
             ida_kernwin.msg(
-                f"[IDAMCP] Failed to bind any port in range "
-                f"{base_port}–{base_port + MAX_PORT_ATTEMPTS - 1}\n"
+                f"[IDAMCP] Server started at http://{self._host}:{port}/sse\n"
             )
+            uvi_config = uvicorn.Config(
+                app,
+                host=self._host,
+                port=port,
+                log_level="warning",
+            )
+            self._server = uvicorn.Server(uvi_config)
+            loop.run_until_complete(self._server.serve())
         finally:
+            # Cancel all remaining tasks (e.g. sse_starlette _shutdown_watcher)
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.run_until_complete(loop.shutdown_asyncgens())
             loop.close()
 
     def stop(self) -> None:
