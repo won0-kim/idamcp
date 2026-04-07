@@ -30,7 +30,7 @@ class _SettingsForm(ida_kernwin.Form):
             f"{status}\n"
             "\n"
             "<Host:{iHost}>\n"
-            "<Base Port:{iPort}>\n",
+            "<Port:{iPort}>\n",
             {
                 "iHost": F.StringInput(value=host),
                 "iPort": F.NumericInput(value=port, tp=F.FT_DEC),
@@ -57,15 +57,27 @@ def show_settings() -> None:
     elif idb_path:
         status += f"\nFile: {idb_path} (auto-allocate)"
 
-    f = _SettingsForm(host, port, status)
+    # Show the current IDB's port (assigned or running), not the base port
+    idb_path = config.get_idb_path()
+    assignments = config.get_port_assignments(cfg)
+    if _plugin and _plugin._server and _plugin._server.is_running:
+        current_port = _plugin._server.port
+    elif idb_path and idb_path in assignments:
+        current_port = assignments[idb_path]
+    else:
+        current_port = config.get_port(cfg)
+
+    f = _SettingsForm(host, current_port, status)
     f.Compile()
     ok = f.Execute()
     if ok == 1:
         new_host = f.iHost.value
         new_port = f.iPort.value
         cfg["host"] = new_host
-        cfg["port"] = new_port
         config.save(cfg)
+        # Save port as this IDB's assignment, not as base port
+        if idb_path:
+            config.set_port_assignment(idb_path, new_port)
         if _plugin:
             _plugin.restart_server()
     f.Free()
@@ -175,26 +187,14 @@ class _SavePortHandler(ida_kernwin.action_handler_t):
         return ida_kernwin.AST_ENABLE_ALWAYS
 
 
-class _StartHandler(ida_kernwin.action_handler_t):
+class _ToggleServerHandler(ida_kernwin.action_handler_t):
     def activate(self, ctx):
         if _plugin:
             if _plugin._server and _plugin._server.is_running:
-                ida_kernwin.msg("[IDAMCP] Server is already running\n")
+                _plugin._server.stop()
+                ida_kernwin.msg("[IDAMCP] Server stopped\n")
             else:
                 _plugin.restart_server()
-        return 1
-
-    def update(self, ctx):
-        return ida_kernwin.AST_ENABLE_ALWAYS
-
-
-class _StopHandler(ida_kernwin.action_handler_t):
-    def activate(self, ctx):
-        if _plugin and _plugin._server and _plugin._server.is_running:
-            _plugin._server.stop()
-            ida_kernwin.msg("[IDAMCP] Server stopped\n")
-        else:
-            ida_kernwin.msg("[IDAMCP] Server is not running\n")
         return 1
 
     def update(self, ctx):
@@ -209,8 +209,7 @@ _ACTIONS = [
     ("idamcp:settings", "Settings...", _SettingsHandler(), ""),
     ("idamcp:port_assignments", "Port Assignments...", _PortAssignmentsHandler(), ""),
     ("idamcp:save_port", "Save Port for This File", _SavePortHandler(), ""),
-    ("idamcp:start", "Start Server", _StartHandler(), ""),
-    ("idamcp:stop", "Stop Server", _StopHandler(), ""),
+    ("idamcp:toggle", "Start/Stop Server", _ToggleServerHandler(), ""),
 ]
 
 _MENU_PATH = "Edit/IDAMCP/"
