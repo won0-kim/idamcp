@@ -39,14 +39,12 @@ class _SettingsForm(ida_kernwin.Form):
 
 
 def show_settings() -> None:
+    """Edit the current IDB's host/port assignment (falls back to base if no IDB)."""
     cfg = config.load()
     host = config.get_host(cfg)
-    port = config.get_port(cfg)
 
     if _plugin and _plugin._server and _plugin._server.is_running:
-        actual_port = _plugin._server.port
-        actual_host = _plugin._server.host
-        status = f"Server: Running on {actual_host}:{actual_port}"
+        status = f"Server: Running on {_plugin._server.host}:{_plugin._server.port}"
     else:
         status = "Server: Stopped"
 
@@ -115,6 +113,11 @@ class _PortAssignmentsChooser(ida_kernwin.Choose):
             for name, a in sorted(config.get_port_assignments().items())
         ]
 
+    def OnClose(self):
+        global _active_chooser
+        if _active_chooser is self:
+            _active_chooser = None
+
     def OnGetSize(self):
         return len(self.items)
 
@@ -151,16 +154,22 @@ class _PortAssignmentsChooser(ida_kernwin.Choose):
 
 
 _CHOOSER_TITLE = "IDAMCP Port Assignments"
+_active_chooser: _PortAssignmentsChooser | None = None
 
 
 def show_port_assignments() -> None:
-    c = _PortAssignmentsChooser()
-    c.Show()
+    global _active_chooser
+    _active_chooser = _PortAssignmentsChooser()
+    _active_chooser.Show()
 
 
 def _notify_assignments_changed() -> None:
     """Refresh the Port Assignments chooser if it's currently open."""
-    ida_kernwin.refresh_chooser(_CHOOSER_TITLE)
+    if _active_chooser is not None:
+        # Must refresh cached items first; refresh_chooser only re-calls
+        # OnGetSize/OnGetLine on the existing instance.
+        _active_chooser._refresh()
+        ida_kernwin.refresh_chooser(_CHOOSER_TITLE)
 
 
 # ---------------------------------------------------------------------------

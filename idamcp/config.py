@@ -10,7 +10,7 @@ _CONFIG_NAME = "idamcp_config.json"
 def _config_path() -> pathlib.Path:
     import ida_diskio
 
-    return pathlib.Path(ida_diskio.get_user_idadir()) / _CONFIG_NAME
+    return pathlib.Path(ida_diskio.get_user_idadir()) / "plugins" / _CONFIG_NAME
 
 
 def load() -> dict:
@@ -25,6 +25,7 @@ def load() -> dict:
 
 def save(cfg: dict) -> None:
     path = _config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
