@@ -53,31 +53,37 @@ def show_settings() -> None:
     idb_path = config.get_idb_path()
     assignments = config.get_port_assignments(cfg)
     if idb_path and idb_path in assignments:
-        status += f"\nFile: {idb_path} (saved port: {assignments[idb_path]})"
+        a = assignments[idb_path]
+        status += f"\nFile: {idb_path} (saved: {a['host']}:{a['port']})"
     elif idb_path:
         status += f"\nFile: {idb_path} (auto-allocate)"
 
-    # Show the current IDB's port (assigned or running), not the base port
-    idb_path = config.get_idb_path()
-    assignments = config.get_port_assignments(cfg)
+    # Show the current IDB's host/port (assigned or running), not the base config
     if _plugin and _plugin._server and _plugin._server.is_running:
+        current_host = _plugin._server.host
         current_port = _plugin._server.port
     elif idb_path and idb_path in assignments:
-        current_port = assignments[idb_path]
+        current_host = assignments[idb_path]["host"]
+        current_port = assignments[idb_path]["port"]
     else:
+        current_host = host
         current_port = config.get_port(cfg)
 
-    f = _SettingsForm(host, current_port, status)
+    f = _SettingsForm(current_host, current_port, status)
     f.Compile()
     ok = f.Execute()
     if ok == 1:
         new_host = f.iHost.value
         new_port = f.iPort.value
-        cfg["host"] = new_host
-        config.save(cfg)
-        # Save port as this IDB's assignment, not as base port
         if idb_path:
-            config.set_port_assignment(idb_path, new_port)
+            # Save host+port as this IDB's assignment
+            config.set_port_assignment(idb_path, new_host, new_port)
+            _notify_assignments_changed()
+        else:
+            # No IDB loaded — update base config
+            cfg["host"] = new_host
+            cfg["port"] = new_port
+            config.save(cfg)
         if _plugin:
             _plugin.restart_server()
     f.Free()
@@ -93,7 +99,7 @@ class _PortAssignmentsChooser(ida_kernwin.Choose):
         ida_kernwin.Choose.__init__(
             self,
             "IDAMCP Port Assignments",
-            [["IDB Path", 60], ["Port", 10]],
+            [["IDB Path", 60], ["Host", 15], ["Port", 10]],
             flags=(
                 ida_kernwin.Choose.CH_CAN_DEL
                 | ida_kernwin.Choose.CH_CAN_INS
@@ -105,8 +111,8 @@ class _PortAssignmentsChooser(ida_kernwin.Choose):
 
     def _refresh(self) -> None:
         self.items = [
-            [name, str(port)]
-            for name, port in sorted(config.get_port_assignments().items())
+            [name, a["host"], str(a["port"])]
+            for name, a in sorted(config.get_port_assignments().items())
         ]
 
     def OnGetSize(self):
@@ -124,26 +130,37 @@ class _PortAssignmentsChooser(ida_kernwin.Choose):
     def OnInsertLine(self, n):
         name = ida_kernwin.ask_str("", 0, "IDB path:")
         if name:
-            port = ida_kernwin.ask_long(13337, "Port number:")
-            if port is not None and port > 0:
-                config.set_port_assignment(name, port)
-                self._refresh()
+            host = ida_kernwin.ask_str("127.0.0.1", 0, "Host:")
+            if host:
+                port = ida_kernwin.ask_long(13337, "Port number:")
+                if port is not None and port > 0:
+                    config.set_port_assignment(name, host, port)
+                    self._refresh()
         return [ida_kernwin.Choose.ALL_CHANGED, n]
 
     def OnEditLine(self, n):
         if 0 <= n < len(self.items):
-            name = self.items[n][0]
-            old_port = int(self.items[n][1])
-            port = ida_kernwin.ask_long(old_port, f"Port for '{name}':")
-            if port is not None and port > 0:
-                config.set_port_assignment(name, port)
-                self._refresh()
+            name, old_host, old_port_s = self.items[n]
+            host = ida_kernwin.ask_str(old_host, 0, f"Host for '{name}':")
+            if host:
+                port = ida_kernwin.ask_long(int(old_port_s), f"Port for '{name}':")
+                if port is not None and port > 0:
+                    config.set_port_assignment(name, host, port)
+                    self._refresh()
         return [ida_kernwin.Choose.ALL_CHANGED, n]
+
+
+_CHOOSER_TITLE = "IDAMCP Port Assignments"
 
 
 def show_port_assignments() -> None:
     c = _PortAssignmentsChooser()
     c.Show()
+
+
+def _notify_assignments_changed() -> None:
+    """Refresh the Port Assignments chooser if it's currently open."""
+    ida_kernwin.refresh_chooser(_CHOOSER_TITLE)
 
 
 # ---------------------------------------------------------------------------
@@ -176,9 +193,13 @@ class _SavePortHandler(ida_kernwin.action_handler_t):
             ida_kernwin.warning("No input file loaded.")
             return 0
         if _plugin and _plugin._server and _plugin._server.is_running:
+            host = _plugin._server.host
             port = _plugin._server.port
-            config.set_port_assignment(idb_path, port)
-            ida_kernwin.msg(f"[IDAMCP] Saved port {port} for '{idb_path}'\n")
+            config.set_port_assignment(idb_path, host, port)
+            _notify_assignments_changed()
+            ida_kernwin.msg(
+                f"[IDAMCP] Saved {host}:{port} for '{idb_path}'\n"
+            )
         else:
             ida_kernwin.warning("Server is not running.")
         return 1
@@ -208,7 +229,7 @@ class _ToggleServerHandler(ida_kernwin.action_handler_t):
 _ACTIONS = [
     ("idamcp:settings", "Settings...", _SettingsHandler(), ""),
     ("idamcp:port_assignments", "Port Assignments...", _PortAssignmentsHandler(), ""),
-    ("idamcp:save_port", "Save Port for This File", _SavePortHandler(), ""),
+    ("idamcp:save_port", "Save Config for This File", _SavePortHandler(), ""),
     ("idamcp:toggle", "Start/Stop Server", _ToggleServerHandler(), ""),
 ]
 

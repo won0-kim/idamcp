@@ -656,7 +656,10 @@ class McpServerRunner:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            app = mcp.sse_app()
+            # StreamableHTTPSessionManager.run() can only be called once per
+            # instance, so reset the cached manager before each (re)start.
+            mcp._session_manager = None
+            app = mcp.streamable_http_app()
 
             if self._fixed_port:
                 # Use the exact saved port — do not auto-allocate
@@ -692,7 +695,7 @@ class McpServerRunner:
 
             self._port = port
             ida_kernwin.msg(
-                f"[IDAMCP] Server started at http://{self._host}:{port}/sse\n"
+                f"[IDAMCP] Server started at http://{self._host}:{port}/mcp\n"
             )
             uvi_config = uvicorn.Config(
                 app,

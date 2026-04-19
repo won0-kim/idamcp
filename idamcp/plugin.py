@@ -10,7 +10,7 @@ from idamcp.server import McpServerRunner
 class IdaMcpPlugin(ida_idaapi.plugin_t):
     flags = ida_idaapi.PLUGIN_KEEP
     comment = "MCP Server for IDA Python"
-    help = "Exposes IDA Python execution via MCP over SSE"
+    help = "Exposes IDA Python execution via MCP over Streamable HTTP"
     wanted_name = "IDAMCP"
     wanted_hotkey = "Ctrl-Shift-M"
     _server: McpServerRunner | None = None
@@ -27,18 +27,19 @@ class IdaMcpPlugin(ida_idaapi.plugin_t):
             ida_kernwin.msg("[IDAMCP] Server stopped\n")
 
         cfg = config.load()
-        host = config.get_host(cfg)
-        base_port = config.get_port(cfg)
 
         idb_path = config.get_idb_path()
         assignments = config.get_port_assignments(cfg)
         reserved_ports = config.get_reserved_ports(cfg)
 
         if idb_path and idb_path in assignments:
-            port = assignments[idb_path]
+            a = assignments[idb_path]
+            host = a["host"]
+            port = a["port"]
             fixed = True
         else:
-            port = base_port
+            host = config.get_host(cfg)
+            port = config.get_port(cfg)
             fixed = False
 
         self._server = McpServerRunner(

@@ -40,15 +40,32 @@ def get_port(cfg: dict | None = None) -> int:
     return int(cfg.get("port", os.environ.get("IDAMCP_PORT", 13337)))
 
 
-def get_port_assignments(cfg: dict | None = None) -> dict[str, int]:
+_DEFAULT_ASSIGN_HOST = "127.0.0.1"
+
+
+def _normalize_assignment(value) -> dict:
+    # Backward compat: old format stored just an int port
+    if isinstance(value, int):
+        return {"host": _DEFAULT_ASSIGN_HOST, "port": value}
+    return {
+        "host": value.get("host", _DEFAULT_ASSIGN_HOST),
+        "port": int(value["port"]),
+    }
+
+
+def get_port_assignments(cfg: dict | None = None) -> dict[str, dict]:
+    """Return {idb_path: {"host": str, "port": int}} with defaults applied."""
     if cfg is None:
         cfg = load()
-    return dict(cfg.get("port_assignments", {}))
+    return {
+        name: _normalize_assignment(v)
+        for name, v in cfg.get("port_assignments", {}).items()
+    }
 
 
-def set_port_assignment(name: str, port: int) -> None:
+def set_port_assignment(name: str, host: str, port: int) -> None:
     cfg = load()
-    cfg.setdefault("port_assignments", {})[name] = port
+    cfg.setdefault("port_assignments", {})[name] = {"host": host, "port": port}
     save(cfg)
 
 
@@ -61,7 +78,7 @@ def remove_port_assignment(name: str) -> None:
 
 
 def get_reserved_ports(cfg: dict | None = None) -> set[int]:
-    return set(get_port_assignments(cfg).values())
+    return {a["port"] for a in get_port_assignments(cfg).values()}
 
 
 def get_idb_path() -> str:

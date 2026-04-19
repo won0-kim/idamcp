@@ -52,7 +52,7 @@ python install.py --uninstall
 
 ## Usage
 
-1. Open IDA Pro — the MCP server starts automatically on `http://127.0.0.1:13337/sse`
+1. Open IDA Pro — the MCP server starts automatically on `http://127.0.0.1:13337/mcp`
 2. Toggle the server on/off with **Ctrl+Shift+M**
 3. Connect your MCP client to the server
 
@@ -64,8 +64,8 @@ Add to your MCP client config (e.g., `.mcp.json`):
 {
   "mcpServers": {
     "idamcp": {
-      "type": "sse",
-      "url": "http://127.0.0.1:13337/sse"
+      "type": "http",
+      "url": "http://127.0.0.1:13337/mcp"
     }
   }
 }
