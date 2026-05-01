@@ -30,15 +30,21 @@ def save(cfg: dict) -> None:
 
 
 def get_host(cfg: dict | None = None) -> str:
+    env = os.environ.get("IDAMCP_HOST")
+    if env:
+        return env
     if cfg is None:
         cfg = load()
-    return cfg.get("host", os.environ.get("IDAMCP_HOST", "127.0.0.1"))
+    return cfg.get("host", "127.0.0.1")
 
 
 def get_port(cfg: dict | None = None) -> int:
+    env = os.environ.get("IDAMCP_PORT")
+    if env:
+        return int(env)
     if cfg is None:
         cfg = load()
-    return int(cfg.get("port", os.environ.get("IDAMCP_PORT", 13337)))
+    return int(cfg.get("port", 13337))
 
 
 _DEFAULT_ASSIGN_HOST = "127.0.0.1"

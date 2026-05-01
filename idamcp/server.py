@@ -655,6 +655,18 @@ class McpServerRunner:
 
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
+
+        # Silently swallow ConnectionResetError noise from the Windows
+        # Proactor loop when a client drops the connection abruptly (WinError
+        # 10054). Everything else falls through to the default handler.
+        def _exc_handler(loop, context):
+            exc = context.get("exception")
+            if isinstance(exc, ConnectionResetError):
+                return
+            loop.default_exception_handler(context)
+
+        loop.set_exception_handler(_exc_handler)
+
         try:
             # StreamableHTTPSessionManager.run() can only be called once per
             # instance, so reset the cached manager before each (re)start.
